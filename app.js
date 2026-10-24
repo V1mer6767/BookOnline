@@ -6,7 +6,7 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const BUILD = 4;
+const BUILD = 5;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /* ---------- Іконки ---------- */
@@ -847,7 +847,7 @@ async function openReader(id) {
     const rec = await fileGet(id);
     if (!rec) throw new Error("файл книги не знайдено");
     const book = await parseBook(meta.format, rec.buf, meta.title);
-    R = { meta, book, ci: 0, tok: 0, chromeOff: true, userScrolled: false, lastTop: 0 };
+    R = { meta, book, ci: 0, tok: 0, chromeOff: true, userScrolled: false, lastTop: 0, openedAt: performance.now(), shownAt: 0, place: null };
     readerEl.hidden = false;
     readerEl.classList.add("chromeOff");
     $("#toast").hidden = true;
@@ -908,8 +908,9 @@ async function showChapter(ci, f = 0, anchor = null) {
     }
     scroller.scrollTop = f * Math.max(0, scroller.scrollHeight - scroller.clientHeight);
   };
+  R.place = place; R.shownAt = performance.now();
   scroller.scrollTop = 0;
-  place(); setTimeout(place, 250); setTimeout(place, 800);
+  place(); setTimeout(place, 250); setTimeout(place, 800); setTimeout(place, 1600);
   updateProgress();
 }
 
@@ -931,14 +932,15 @@ function updateProgress() {
 let saveT, scrollRaf;
 scroller.addEventListener("scroll", () => {
   if (!R) return;
-  R.userScrolled = true;
+  // стрибок без дій користувача одразу після відкриття розділу — повертаємо на місце
+  if (!R.userScrolled && R.place && performance.now() - R.shownAt < 3000) { R.place(); return; }
   if (!R.chromeOff && Math.abs(scroller.scrollTop - R.lastTop) > 50) setChrome(false);
   cancelAnimationFrame(scrollRaf);
   scrollRaf = requestAnimationFrame(updateProgress);
   clearTimeout(saveT);
   saveT = setTimeout(() => savePos(), 700);
 }, { passive: true });
-["touchstart", "wheel"].forEach(ev => scroller.addEventListener(ev, () => { if (R) R.userScrolled = true; }, { passive: true }));
+["touchstart", "wheel", "mousedown", "pointerdown"].forEach(ev => scroller.addEventListener(ev, () => { if (R && performance.now() - R.openedAt > 800) R.userScrolled = true; }, { passive: true }));
 
 function savePos(now) {
   if (!R) return;
@@ -977,6 +979,7 @@ function pageBy(dir) {
 
 scroller.addEventListener("click", e => {
   if (!R) return;
+  if (performance.now() - R.openedAt < 800) return;   // подвійний клік/тап по картці не має гортати книгу
   const nb = e.target.closest("[data-nav]");
   if (nb) { const d = +nb.dataset.nav; showChapter(R.ci + d, d < 0 ? 1 : 0); return; }
   const a = e.target.closest("a[data-path]");
@@ -1043,7 +1046,8 @@ $$("#themeSeg button").forEach(b => b.onclick = () => restyle(() => (S.theme = b
 
 /* клавіатура (для ПК) */
 document.addEventListener("keydown", e => {
-  if (!R || e.target.tagName === "INPUT") return;
+  if (!R || e.target.tagName === "INPUT" || performance.now() - R.openedAt < 800) return;
+  R.userScrolled = true;
   if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") { e.preventDefault(); pageBy(1); }
   else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); pageBy(-1); }
   else if (e.key === "Escape") history.back();
