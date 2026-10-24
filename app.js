@@ -572,9 +572,10 @@ function showView(id) {
   $$(".view").forEach(v => (v.hidden = v.id !== id));
   $$(".tab").forEach(t => t.classList.toggle("on", t.dataset.view === id));
   $("#viewTitle").textContent = TITLES[id];
+  if (id === "searchView" && !browsed) { browsed = true; doSearch(1); }
 }
 $$(".tab").forEach(t => t.addEventListener("click", () => showView(t.dataset.view)));
-$("#emptySearch").onclick = () => { showView("searchView"); $("#q").focus(); };
+$("#emptySearch").onclick = () => showView("searchView");
 
 /* ---------- Імпорт файлів ---------- */
 $("#importBtn").onclick = () => $("#fileIn").click();
@@ -601,28 +602,59 @@ const NOTES = {
   wikisource: "Вікіджерела: українська класика, поезія й проза, що вже стали суспільним надбанням.",
   archive: "Internet Archive: відкриті книги в EPUB (лише ті, що можна завантажити вільно)."
 };
-let srcSel = "gutenberg", langSel = "", page = 1, lastQuery = "", results = [];
+const SHELVES = {
+  gutenberg: [
+    { l: "Популярне", t: "" }, { l: "Для дітей", t: "children" }, { l: "Казки", t: "fairy tales" },
+    { l: "Фентезі", t: "fantasy" }, { l: "Пригоди", t: "adventure" }, { l: "Романтика", t: "romance" },
+    { l: "Фантастика", t: "science fiction" }, { l: "Детективи", t: "detective" }, { l: "Поезія", t: "poetry" }
+  ],
+  wikisource: [
+    { l: "Казки", q: "казка" }, { l: "Для дітей", q: "для дітей" }, { l: "Оповідання", q: "оповідання" },
+    { l: "Поезія", q: "поезія" }, { l: "Леся Українка", q: "Леся Українка" }, { l: "Марко Вовчок", q: "Марко Вовчок" },
+    { l: "Франко", q: "Франко" }, { l: "Шевченко", q: "Шевченко" }
+  ],
+  archive: [
+    { l: "Дитячі", q: "children" }, { l: "Казки", q: "fairy tales" }, { l: "Пригоди", q: "adventure" },
+    { l: "Фентезі", q: "fantasy" }, { l: "Класика", q: "classic" }
+  ]
+};
+let srcSel = "gutenberg", langSel = "", page = 1, lastQuery = "", results = [], browsed = false;
+const shelfIdx = { gutenberg: 0, wikisource: 0, archive: 0 };
 
+function renderShelves() {
+  $("#shelfChips").innerHTML = SHELVES[srcSel].map((s, i) =>
+    `<button class="chip${!lastQuery && i === shelfIdx[srcSel] ? " on" : ""}" data-i="${i}">${esc(s.l)}</button>`).join("");
+}
+$("#shelfChips").addEventListener("click", e => {
+  const c = e.target.closest(".chip"); if (!c) return;
+  shelfIdx[srcSel] = +c.dataset.i; lastQuery = ""; $("#q").value = "";
+  renderShelves(); doSearch(1);
+});
 function setSrc(s) {
   srcSel = s;
   $$("#srcChips .chip").forEach(c => c.classList.toggle("on", c.dataset.src === s));
   $("#langChips").hidden = s !== "gutenberg";
   $("#srcNote").textContent = NOTES[s];
+  renderShelves();
 }
-$$("#srcChips .chip").forEach(c => c.onclick = () => { setSrc(c.dataset.src); if (lastQuery) doSearch(1); });
+$$("#srcChips .chip").forEach(c => c.onclick = () => { setSrc(c.dataset.src); doSearch(1); });
 $$("#langChips .chip").forEach(c => c.onclick = () => {
   langSel = c.dataset.lang;
   $$("#langChips .chip").forEach(x => x.classList.toggle("on", x === c));
-  if (lastQuery) doSearch(1);
+  doSearch(1);
 });
-$("#searchForm").addEventListener("submit", e => { e.preventDefault(); const v = $("#q").value.trim(); if (v) { $("#q").blur(); lastQuery = v; doSearch(1); } });
+$("#searchForm").addEventListener("submit", e => {
+  e.preventDefault();
+  lastQuery = $("#q").value.trim();
+  $("#q").blur(); renderShelves(); doSearch(1);
+});
 setSrc("gutenberg");
 
 const magic = fmt => b => fmt === "epub" ? isZip(b) : b.byteLength > 200;
 
 const SOURCES = {
-  async gutenberg(qs, p) {
-    const j = await fetchJSON(`https://gutendex.com/books/?search=${encodeURIComponent(qs)}${langSel ? "&languages=" + langSel : ""}${p > 1 ? "&page=" + p : ""}`);
+  async gutenberg(qs, p, topic) {
+    const j = await fetchJSON(`https://gutendex.com/books/?${qs ? "search=" + encodeURIComponent(qs) : ""}${topic ? "&topic=" + encodeURIComponent(topic) : ""}${langSel ? "&languages=" + langSel : ""}${p > 1 ? "&page=" + p : ""}`);
     return {
       more: !!j.next,
       items: j.results.map(b => {
@@ -724,7 +756,8 @@ async function doSearch(p) {
   if (p === 1) { results = []; box.innerHTML = '<div class="spin"></div>'; }
   else box.querySelector(".more")?.remove();
   try {
-    const r = await SOURCES[srcSel](lastQuery, p);
+    const sh = lastQuery ? null : SHELVES[srcSel][shelfIdx[srcSel]];
+    const r = await SOURCES[srcSel](lastQuery || (sh && sh.q) || "", p, (sh && sh.t) || "");
     results = results.concat(r.items);
     renderResults(r.more);
     if (!results.length) box.innerHTML = '<div class="note">Нічого не знайдено. Спробуй іншу назву, автора або інше джерело.</div>';
