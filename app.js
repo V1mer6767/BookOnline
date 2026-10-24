@@ -6,6 +6,7 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const BUILD = 4;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /* ---------- Іконки ---------- */
@@ -826,8 +827,8 @@ $("#gearBtn").onclick = async () => {
   $("#settings").hidden = false;
   try {
     const e = await navigator.storage.estimate();
-    $("#storageInfo").textContent = `Книги займають ${(e.usage / 1048576).toFixed(1)} МБ із доступних ${(e.quota / 1048576 / 1024).toFixed(1)} ГБ. Усе зберігається лише на цьому пристрої.`;
-  } catch (err) { $("#storageInfo").textContent = "Усе зберігається лише на цьому пристрої."; }
+    $("#storageInfo").textContent = `Версія ${BUILD}. Книги займають ${(e.usage / 1048576).toFixed(1)} МБ із доступних ${(e.quota / 1048576 / 1024).toFixed(1)} ГБ. Усе зберігається лише на цьому пристрої.`;
+  } catch (err) { $("#storageInfo").textContent = `Версія ${BUILD}. Усе зберігається лише на цьому пристрої.`; }
 };
 $("#saveSettings").onclick = () => { S.proxy = $("#proxyIn").value.trim(); saveS(); $("#settings").hidden = true; toast("Збережено"); };
 $$("[data-close]").forEach(b => b.addEventListener("click", () => { $("#" + b.dataset.close).hidden = true; }));
@@ -857,7 +858,7 @@ async function openReader(id) {
     history.pushState({ reader: 1 }, "");
     requestWake();
     let c = meta.pos.c || 0, f = meta.pos.f || 0;
-    if (f > 0.97 && c < book.n - 1) { c++; f = 0; }           // дочитаний розділ → наступний
+    if (f > 0.95) { if (c < book.n - 1) c++; f = 0; }          // дочитаний розділ → наступний (або початок останнього)
     if (c === 0 && f === 0) {                                  // пропускаємо порожні службові сторінки на початку
       for (let k = 0; k < 4 && c < book.n - 1; k++) {
         let h = ""; try { h = await book.html(c); } catch (e) {}
@@ -1058,6 +1059,7 @@ async function hardRefresh() {
   try {
     if ("serviceWorker" in navigator) { const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r => r.unregister())); }
     if (window.caches) { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); }
+    await Promise.all(["./", "index.html", "app.js", "style.css", "sw.js"].map(u => fetch(u, { cache: "reload" }).catch(() => {})));
   } catch (e) {}
   location.reload();
 }
@@ -1077,5 +1079,7 @@ applyTheme(); applyReadStyle();
 })();
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+  const hadCtl = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadCtl && !R && !busy.size) location.reload(); });
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
