@@ -17,9 +17,11 @@ const ICON = {
   toc: svg('<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>'),
   close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
   book: svg('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'),
+  refresh: svg('<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/>'),
   search: svg('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>')
 };
 $("#importBtn").innerHTML = ICON.plus;
+$("#refreshBtn").innerHTML = ICON.refresh;
 $("#gearBtn").innerHTML = ICON.gear;
 $("#rBack").innerHTML = ICON.back;
 $("#rToc").innerHTML = ICON.toc;
@@ -854,7 +856,16 @@ async function openReader(id) {
     buildToc();
     history.pushState({ reader: 1 }, "");
     requestWake();
-    await showChapter(meta.pos.c || 0, meta.pos.f || 0);
+    let c = meta.pos.c || 0, f = meta.pos.f || 0;
+    if (f > 0.97 && c < book.n - 1) { c++; f = 0; }           // дочитаний розділ → наступний
+    if (c === 0 && f === 0) {                                  // пропускаємо порожні службові сторінки на початку
+      for (let k = 0; k < 4 && c < book.n - 1; k++) {
+        let h = ""; try { h = await book.html(c); } catch (e) {}
+        if (/<img/i.test(h) || h.replace(/<[^>]+>/g, "").trim().length > 80) break;
+        c++;
+      }
+    }
+    await showChapter(c, f);
   } catch (e) {
     toast("Не вдалося відкрити книгу: " + e.message, 5000);
     R = null; readerEl.hidden = true;
@@ -901,7 +912,7 @@ async function showChapter(ci, f = 0, anchor = null) {
   updateProgress();
 }
 
-const curFrac = () => { const m = scroller.scrollHeight - scroller.clientHeight; return m > 4 ? clamp(scroller.scrollTop / m, 0, 1) : 1; };
+const curFrac = () => { const m = scroller.scrollHeight - scroller.clientHeight; return m > 4 ? clamp(scroller.scrollTop / m, 0, 1) : 0; };
 const overall = () => R ? (R.ci + curFrac()) / R.book.n : 0;
 
 function chapterLabel() {
@@ -931,8 +942,9 @@ scroller.addEventListener("scroll", () => {
 function savePos(now) {
   if (!R) return;
   const m = R.meta;
-  m.pos = { c: R.ci, f: curFrac() };
-  m.pct = Math.round(overall() * 100);
+  const f = R.userScrolled ? curFrac() : (R.ci === (m.pos && m.pos.c) ? m.pos.f || 0 : 0);
+  m.pos = { c: R.ci, f };
+  m.pct = Math.round(((R.ci + f) / R.book.n) * 100);
   m.last = Date.now();
   dbPut(m).catch(() => {});
 }
@@ -1040,9 +1052,29 @@ document.addEventListener("keydown", e => {
 async function requestWake() { try { if ("wakeLock" in navigator && !wake) { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => (wake = null)); } } catch (e) {} }
 function releaseWake() { try { wake && wake.release(); } catch (e) {} wake = null; }
 
+/* ---------- Оновлення застосунку ---------- */
+async function hardRefresh() {
+  toast("Оновлюю…", 4000);
+  try {
+    if ("serviceWorker" in navigator) { const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r => r.unregister())); }
+    if (window.caches) { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); }
+  } catch (e) {}
+  location.reload();
+}
+$("#refreshBtn").onclick = hardRefresh;
+$("#updateBtn").onclick = hardRefresh;
+
 /* ---------- Старт ---------- */
 applyTheme(); applyReadStyle();
-renderLib();
+(async () => {
+  try {
+    if (!localStorage.getItem("ch_posfix2")) {
+      for (const b of await dbAll()) { b.pos = { c: 0, f: 0 }; b.pct = 0; await dbPut(b); }
+      localStorage.setItem("ch_posfix2", "1");
+    }
+  } catch (e) {}
+  renderLib();
+})();
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
