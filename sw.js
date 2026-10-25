@@ -1,4 +1,4 @@
-const CACHE = "chytalnia-cache-v5";
+const CACHE = "chytalnia-cache-v6";
 const ASSETS = [
   "./", "index.html", "style.css", "app.js", "manifest.json",
   "vendor/jszip.min.js",

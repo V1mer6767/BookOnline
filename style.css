@@ -81,7 +81,7 @@ main{flex:1;min-height:0;position:relative}
 .res .info{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .res .info b{font-size:15px;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .res .info span{font-size:12.5px;color:var(--fg2)}
-.res .act{margin-top:auto;padding-top:6px;display:flex;align-items:center;gap:10px}
+.res .act{margin-top:auto;padding-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .prog{height:6px;border-radius:3px;background:var(--bg3);flex:1;overflow:hidden}
 .prog i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
 .err{color:var(--danger);font-size:12.5px;line-height:1.35}

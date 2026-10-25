@@ -6,7 +6,7 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const BUILD = 5;
+const BUILD = 6;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /* ---------- Іконки ---------- */
@@ -701,11 +701,18 @@ const SOURCES = {
     const list = (j.query && j.query.search) || [];
     return {
       more: !!j.continue,
-      items: list.map(r => ({
-        key: "wikisource:" + r.title, title: r.title, author: r.snippet.replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&amp;/g, "&").slice(0, 110),
-        meta: "Українська · Вікіджерела", cover: null, canDl: true,
-        get: async onProgress => ({ buf: await wsBook(WS, r.title, onProgress), format: "html" })
-      }))
+      items: list.map(r => {
+        const parts = r.title.split("/");
+        const parent = parts.length > 1 ? parts[0] : "";
+        return {
+          key: "wikisource:" + r.title, title: parts[parts.length - 1], full: r.title,
+          author: parent ? "з «" + parent + "»" : r.snippet.replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&amp;/g, "&").slice(0, 110),
+          meta: parent ? "Один твір · Вікіджерела" : "Збірка або твір · Вікіджерела", cover: null, canDl: true,
+          get: async onProgress => ({ buf: await wsBook(WS, r.title, onProgress), format: "html" }),
+          parent, parentKey: "wikisource:" + parent,
+          getParent: async onProgress => ({ buf: await wsBook(WS, parent, onProgress), format: "html" })
+        };
+      }).sort((a, b) => (a.parent ? 1 : 0) - (b.parent ? 1 : 0))
     };
   }
 };
@@ -791,20 +798,24 @@ function refreshResultButtons() {
   $$("#results .res").forEach(el => {
     const r = results[+el.dataset.i]; if (!r) return;
     const act = el.querySelector(".act");
-    if (busy.has(r.key)) return;
+    if (busy.has(r.key) || (r.parentKey && busy.has(r.parentKey))) return;
     const have = books.find(b => b.src === r.key);
-    if (have) act.innerHTML = `<button class="btn sm primary" data-open="${have.id}">Читати</button><span style="font-size:12.5px;color:var(--fg2)">у бібліотеці</span>`;
-    else if (!r.canDl) act.innerHTML = '<span class="err">Немає придатного формату</span>';
-    else act.innerHTML = '<button class="btn sm primary" data-dl="1">Завантажити</button>';
+    let h;
+    if (have) h = `<button class="btn sm primary" data-open="${have.id}">Читати</button>`;
+    else if (!r.canDl) h = '<span class="err">Немає придатного формату</span>';
+    else h = '<button class="btn sm primary" data-dl="1">Завантажити</button>';
+    if (r.parent) {
+      const hp = books.find(b => b.src === r.parentKey);
+      h += hp ? `<button class="btn sm" data-open="${hp.id}">Збірка: читати</button>`
+              : `<button class="btn sm" data-dlparent="1" title="${esc(r.parent)}">Вся збірка</button>`;
+    }
+    act.innerHTML = h;
   });
 }
 
-$("#results").addEventListener("click", async e => {
-  const op = e.target.closest("[data-open]");
-  if (op) return openReader(op.dataset.open);
-  const dl = e.target.closest("[data-dl]"); if (!dl) return;
-  const el = dl.closest(".res"), r = results[+el.dataset.i], act = el.querySelector(".act");
-  busy.add(r.key);
+async function runDownload(el, opt) {
+  const act = el.querySelector(".act");
+  busy.add(opt.key);
   act.innerHTML = '<div class="prog"><i></i></div><span style="font-size:12px;color:var(--fg2)" class="pct">0%</span>';
   const bar = act.querySelector("i"), pct = act.querySelector(".pct");
   const onP = (f, got) => {
@@ -812,13 +823,22 @@ $("#results").addEventListener("click", async e => {
     bar.style.width = Math.round(v * 100) + "%"; pct.textContent = Math.round(v * 100) + "%";
   };
   try {
-    const got = await r.get(onP);
+    const got = await opt.get(onP);
     bar.style.width = "100%"; pct.textContent = "готую…";
-    await addBook({ buf: got.buf, format: got.format, src: r.key, title: r.title, author: r.author, coverUrl: got.coverUrl });
+    await addBook({ buf: got.buf, format: got.format, src: opt.key, title: opt.title, author: opt.author, coverUrl: got.coverUrl });
     toast("Додано в бібліотеку");
   } catch (err) {
-    act.innerHTML = `<div class="err">Не вдалося завантажити (${esc(err.message)}).<br><button class="btn sm" data-dl="1" style="margin-top:6px">Ще раз</button></div>`;
-  } finally { busy.delete(r.key); refreshResultButtons(); }
+    act.innerHTML = `<div class="err">Не вдалося завантажити (${esc(err.message)}).<br><button class="btn sm" data-retry="1" style="margin-top:6px">Ще раз</button></div>`;
+  } finally { busy.delete(opt.key); refreshResultButtons(); }
+}
+
+$("#results").addEventListener("click", e => {
+  const op = e.target.closest("[data-open]");
+  if (op) return openReader(op.dataset.open);
+  const el = e.target.closest(".res"); if (!el) return;
+  const r = results[+el.dataset.i]; if (!r) return;
+  if (e.target.closest("[data-dlparent]")) return runDownload(el, { key: r.parentKey, get: r.getParent, title: r.parent.split("/").pop(), author: "" });
+  if (e.target.closest("[data-dl]") || e.target.closest("[data-retry]")) return runDownload(el, { key: r.key, get: r.get, title: r.title, author: r.parent ? "" : r.author });
 });
 
 /* ---------- Налаштування (вікно) ---------- */
@@ -908,13 +928,13 @@ async function showChapter(ci, f = 0, anchor = null) {
     }
     scroller.scrollTop = f * Math.max(0, scroller.scrollHeight - scroller.clientHeight);
   };
-  R.place = place; R.shownAt = performance.now();
+  R.place = place; R.shownAt = performance.now(); R.fHint = f;
   scroller.scrollTop = 0;
   place(); setTimeout(place, 250); setTimeout(place, 800); setTimeout(place, 1600);
   updateProgress();
 }
 
-const curFrac = () => { const m = scroller.scrollHeight - scroller.clientHeight; return m > 4 ? clamp(scroller.scrollTop / m, 0, 1) : 0; };
+const curFrac = () => { const m = scroller.scrollHeight - scroller.clientHeight; return m > 4 ? clamp(scroller.scrollTop / m, 0, 1) : (R && R.fHint) || 0; };
 const overall = () => R ? (R.ci + curFrac()) / R.book.n : 0;
 
 function chapterLabel() {
@@ -922,10 +942,13 @@ function chapterLabel() {
   const t = R.book.toc.filter(x => x.ch <= R.ci).pop();
   return (t && t.title) || R.book.titles[R.ci] || "";
 }
+let sliderDrag = false, sliderT;
 function updateProgress() {
   if (!R) return;
   const p = overall();
-  $("#rSlider").value = Math.round(p * 1000);
+  if (!sliderDrag) $("#rSlider").value = Math.round(p * 1000);
+  const fits = R.book.n === 1 && scroller.scrollHeight - scroller.clientHeight <= 120;
+  $("#rSlider").style.display = fits ? "none" : "";
   $("#rPct").textContent = Math.round(p * 100) + "%";
   $("#rChap").textContent = chapterLabel();
 }
@@ -934,7 +957,7 @@ scroller.addEventListener("scroll", () => {
   if (!R) return;
   // стрибок без дій користувача одразу після відкриття розділу — повертаємо на місце
   if (!R.userScrolled && R.place && performance.now() - R.shownAt < 3000) { R.place(); return; }
-  if (!R.chromeOff && Math.abs(scroller.scrollTop - R.lastTop) > 50) setChrome(false);
+  if (!sliderDrag && !R.chromeOff && Math.abs(scroller.scrollTop - R.lastTop) > 50) setChrome(false);
   cancelAnimationFrame(scrollRaf);
   scrollRaf = requestAnimationFrame(updateProgress);
   clearTimeout(saveT);
@@ -998,12 +1021,22 @@ scroller.addEventListener("click", e => {
 });
 
 /* слайдер */
-$("#rSlider").addEventListener("input", e => { $("#rPct").textContent = Math.round(e.target.value / 10) + "%"; });
-$("#rSlider").addEventListener("change", e => {
+const sliderEl = $("#rSlider");
+["pointerdown", "touchstart", "mousedown"].forEach(ev => sliderEl.addEventListener(ev, () => { sliderDrag = true; if (R) R.userScrolled = true; }, { passive: true }));
+["pointerup", "pointercancel", "touchend", "mouseup", "change", "blur"].forEach(ev => sliderEl.addEventListener(ev, () => { setTimeout(() => { sliderDrag = false; updateProgress(); }, 250); }));
+sliderEl.addEventListener("input", e => {
   if (!R) return;
+  R.userScrolled = true;
   const v = (e.target.value / 1000) * R.book.n;
-  const ci = Math.min(R.book.n - 1, Math.floor(v));
-  showChapter(ci, v - ci);
+  const ci = Math.min(R.book.n - 1, Math.floor(v)), f = v - ci;
+  $("#rPct").textContent = Math.round(e.target.value / 10) + "%";
+  if (ci === R.ci) {
+    scroller.scrollTop = f * Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    R.lastTop = scroller.scrollTop;
+  } else {
+    clearTimeout(sliderT);
+    sliderT = setTimeout(async () => { await showChapter(ci, f); R.userScrolled = true; }, 120);
+  }
 });
 
 /* зміст */
@@ -1013,7 +1046,7 @@ function buildToc() {
   $("#tocList").onclick = e => {
     const b = e.target.closest(".tocItem"); if (!b) return;
     const t = list[+b.dataset.i];
-    closePanels(); showChapter(t.ch, 0, t.id || null);
+    closePanels(); setChrome(false); showChapter(t.ch, 0, t.id || null);
   };
 }
 $("#rToc").onclick = () => {
